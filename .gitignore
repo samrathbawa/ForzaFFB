@@ -29,7 +29,3 @@ config.local.json
 Thumbs.db
 .idea/
 .vscode/
-
-# Tooling artifacts not part of this project (auto-generated / unrelated MCP config)
-AGENTS.md
-process_whitelist.json
