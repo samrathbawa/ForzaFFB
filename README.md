@@ -1,47 +1,35 @@
-# forza_ffb — Forza telemetry → synthesized Force Feedback
+# forza_ffb
 
-Reads a Forza game's **Data Out** UDP telemetry (default `127.0.0.1:2066`), **synthesizes a
-force-feedback signal** from the car physics, and sends it to your wheel one of three ways:
+Force feedback for Forza, built from the game's telemetry.
 
-- **`ffbwheel`** — **real force feedback** to a physical wheel (MOZA R3 & any DirectInput FFB wheel) via SDL_Haptic;
-- **`vjoy`** — the effect channels as **vJoy axes**, for remapping in **Joystick Gremlin** or feeding a DIY device;
-- **`console`** — prints the channels for tuning / verification (runs on any OS).
+Forza's **Data Out** feature streams car physics over UDP. forza_ffb listens to that stream (default `127.0.0.1:2066`), turns the physics into a steering force, and sends the force to your wheel. You pick one of three outputs:
 
-> ### ⚠️ Read this first — what this tool actually does
-> **Forza's Data Out stream contains no force-feedback channel.** It carries *physics* —
-> slip angles, lateral G, surface rumble, suspension travel, wheel speeds. There is no "FFB"
-> value to copy out. This tool **computes** a force signal from that physics (cornering load +
-> tyre self-aligning torque, road texture, kerb impacts, understeer lightening) and sends it to
-> your wheel. That synthesis is the whole point — the steering force you feel is *this tool's*,
-> not the game's own FFB.
+- **`ffbwheel`** drives a real wheel motor through SDL_Haptic. I built it for a MOZA R3, and any DirectInput FFB wheel should work.
+- **`vjoy`** writes the effect channels to vJoy axes, so Joystick Gremlin, SimHub or a DIY device can read them.
+- **`console`** prints the channels in your terminal. Use it to check that data arrives and to tune. It runs on any OS.
 
-> ### ⚠️ Tested hardware — use at your own risk
-> This has only been tested on a **MOZA R3** wheelbase with the **MOZA ES** wheel. It may not
-> behave correctly on other wheelbases, wheels, or force-feedback devices — available effects,
-> gains, and force direction can differ between devices. **Use it entirely at your own risk.**
-> When trying it on any wheel, start with a low `--wheel-gain`, keep a hand near the wheel (or
-> the base's power switch), and confirm the feel at low speed before driving hard. The authors
-> accept no liability for damage or injury (see the MIT license).
+## Read this before you plug in a wheel
+
+**Forza sends no force-feedback signal.** Data Out carries slip angles, lateral G, surface rumble, suspension travel and wheel speeds. forza_ffb computes a force from those numbers: cornering load plus tyre self-aligning torque, road texture, kerb hits, and a lighter wheel when the front tyres wash out. The force in your hands comes from this tool's math, so expect it to feel different from the game's built-in FFB.
+
+**I have tested one setup: a MOZA R3 base with the MOZA ES wheel.** Other bases can expose different effects, gains and force directions. You run this at your own risk. On a new wheel, start with a low `--wheel-gain`, keep a hand near the wheel or the base's power switch, and drive slow laps until you trust the feel. The authors accept no liability for damage or injury (see the MIT license).
 
 ---
 
 ## Supported games
 
-**Only Forza Horizon 6 has been tested.** The other titles below share the same Data Out wire
-format (or are auto-detected by packet length), so they *should* work — but they are unverified;
-treat them as best-effort and tune carefully.
+I have tested Forza Horizon 6 and nothing else. The other titles below use the same Data Out format, or one the parser detects by packet length, so they should work. Treat them as untested and tune with care.
 
-| Game | Data Out? | Packet format | Status |
-|------|-----------|---------------|--------|
-| **Forza Horizon 6** | ✅ | Horizon, 324 B | ✅ **Tested** — the only verified title |
-| Forza Horizon 5 | ✅ | Horizon, 324 B | Should work — identical 324 B format (untested) |
-| Forza Horizon 4 | ✅ | Horizon, 324 B | Should work — identical 324 B format (untested) |
-| Forza Motorsport (2023) | ✅ | Car Dash, 331 B | Should work — auto-detected by length (untested) |
-| Forza Motorsport 7 | ✅ | Car Dash, 311 B | Should work — auto-detected by length (untested) |
-| Forza Horizon 3 & older | ❌ | — | ❌ Not possible — no Data Out telemetry exists |
+| Game | Data Out | Packet format | Status |
+|------|----------|---------------|--------|
+| **Forza Horizon 6** | Yes | Horizon, 324 B | **Tested** |
+| Forza Horizon 5 | Yes | Horizon, 324 B | Untested, same format as FH6 |
+| Forza Horizon 4 | Yes | Horizon, 324 B | Untested, same format as FH6 |
+| Forza Motorsport (2023) | Yes | Car Dash, 331 B | Untested, detected by length |
+| Forza Motorsport 7 | Yes | Car Dash, 311 B | Untested, detected by length |
+| Forza Horizon 3 and older | No | n/a | Can't work |
 
-Data Out was introduced in Forza Motorsport 7 (2017); the first *Horizon* title with it is FH4.
-**FH3 and earlier emit no telemetry on any port**, so this tool has nothing to read from them.
+Turn 10 added Data Out in Forza Motorsport 7 (2017), and FH4 was the first Horizon game to ship it. FH3 and earlier send no telemetry on any port, so forza_ffb has nothing to read.
 
 ---
 
@@ -52,10 +40,9 @@ Forza game        ──UDP packets──▶  TelemetryListener ──▶  FFBEn
 (Data Out, :2066)                    (parse, autodetect)    (physics→force)  ffbwheel / vjoy / console
 ```
 
-The packet format is detected by length and parsed from a single field table whose offsets are
-computed and self-asserted at import (Sled 232 / FM7 311 / Horizon 324 / FM2023 331). Forza only
-streams **while you're driving** (not menus/pauses/replays); when packets stop, the wheel relaxes
-to neutral after `stale_timeout_s`.
+The parser picks the packet format from its length: Sled 232, FM7 311, Horizon 324 or FM2023 331 bytes. It reads each field from one table, computes the offsets at import and asserts the sizes. If an offset is wrong, you get an error at startup before any bad value reaches your wheel.
+
+Forza streams while you drive. Menus, pause screens and replays send nothing. When the packets stop, forza_ffb outputs neutral force after `stale_timeout_s` and the wheel goes slack.
 
 ---
 
@@ -63,23 +50,21 @@ to neutral after `stale_timeout_s`.
 
 | Channel | Range | Derived from | Feel |
 |---------|-------|--------------|------|
-| `steer_force` | −1…+1 | lateral G + front slip-angle, speed-gated, reduced on front grip loss | main wheel torque |
+| `steer_force` | −1…+1 | lateral G + front slip angle, gated by speed, reduced when the fronts lose grip | main wheel torque |
 | `g_lat` | −1…+1 | `AccelerationX` | cornering G |
 | `g_long` | −1…+1 | `AccelerationZ` | accel / brake G |
-| `road_texture` | 0…1 | front `SurfaceRumble` | road roughness / fine vibration |
-| `kerb` | 0…1 | sudden `SuspensionTravelMeters` deltas + rumble strips | kerb / bump jolts |
-| `understeer` | 0…1 | front `TireCombinedSlip` past grip limit | front washing out |
-| `oversteer` | 0…1 | rear `TireCombinedSlip` past grip limit | rear sliding / wheelspin |
+| `road_texture` | 0…1 | front `SurfaceRumble` | road roughness, fine vibration |
+| `kerb` | 0…1 | sudden `SuspensionTravelMeters` changes + rumble strips | kerb and bump jolts |
+| `understeer` | 0…1 | front `TireCombinedSlip` past the grip limit | front washing out |
+| `oversteer` | 0…1 | rear `TireCombinedSlip` past the grip limit | rear sliding or wheelspin |
 
-`ffbwheel` uses `steer_force` for the constant motor torque and `road_texture` + `kerb` for the
-sine vibration. `vjoy` maps every channel to an axis (configurable).
+`ffbwheel` turns `steer_force` into constant motor torque and mixes `road_texture` and `kerb` into a sine vibration. `vjoy` maps each channel to an axis, and you can change the mapping in the config.
 
 ---
 
 ## Install
 
-Requires **Python 3.8+**. The core (telemetry parse + FFB synthesis) and the **console** backend
-and test-suite need **only the standard library**.
+You need **Python 3.8+**. The core (parsing and force synthesis), the console backend and the test suite use the standard library alone.
 
 ```bash
 pip install -e .                 # core + console backend
@@ -87,68 +72,57 @@ pip install -e .[ffbwheel]       # + real FFB to a physical wheel (pysdl2 + bund
 pip install -e .[vjoy]           # + vJoy axis output (Windows + vJoy driver)
 ```
 
-This registers a `forza_ffb` command and makes `python -m forza_ffb` work from anywhere.
-(No install? Run in place with `set PYTHONPATH=src` then `python -m forza_ffb ...`.)
+The install gives you a `forza_ffb` command, and `python -m forza_ffb` works from any folder. To run without installing, `set PYTHONPATH=src` and then `python -m forza_ffb ...`.
 
-| Backend | Extra needed | Notes |
-|---------|--------------|-------|
+| Backend | Extra packages | Notes |
+|---------|----------------|-------|
 | `console` | none | any OS |
-| `ffbwheel` | `pysdl2` + `pysdl2-dll` | Windows; `pysdl2-dll` bundles SDL2.dll |
-| `vjoy` | `pyvjoy` + vJoy driver | Windows; enable a device in *Configure vJoy* |
+| `ffbwheel` | `pysdl2` + `pysdl2-dll` | Windows. `pysdl2-dll` ships SDL2.dll for you |
+| `vjoy` | `pyvjoy` + vJoy driver | Windows. Enable a device in *Configure vJoy* |
 
 ---
 
 ## Quick start
 
-**1. Enable Data Out in the game** — Settings → HUD & Gameplay → **Data Out**:
-`Data Out = ON`, `IP = 127.0.0.1` (or the bridge PC's IP), `Port = 2066` (match `--port`).
+**1. Turn on Data Out in the game.** Go to Settings → HUD & Gameplay → **Data Out** and set
+`Data Out = ON`, `IP = 127.0.0.1` (or the IP of the PC running forza_ffb), and `Port = 2066` (or whatever you pass to `--port`).
 
-**2. Confirm data is flowing with the console backend:**
+**2. Check that data arrives, using the console backend:**
 ```bat
 python -m forza_ffb --backend console --port 2066 -v
 ```
-Drive; you should see live channel values and a centered `steer[--##--]` meter. No game? Replay
-synthetic packets from another terminal: `python tools/fake_forza_sender.py --scenario sweep --port 2066`.
+Start driving. You should see channel values updating and a steering meter like `steer[--##--]`. No game handy? Run `python tools/fake_forza_sender.py --scenario sweep --port 2066` in a second terminal to send synthetic packets.
 
-**3. Send it to your wheel (e.g. MOZA R3):**
+**3. Send the force to your wheel (a MOZA R3 in this example):**
 ```bat
 python -m forza_ffb --list-devices
 REM ->  [0] MOZA R3 Racing Wheel  (FFB-capable)
 python -m forza_ffb --backend ffbwheel --device-name "MOZA" --port 2066
 ```
 
-Press **`Ctrl+C`** to stop — the wheel relaxes (force zeroed) and is released on exit.
+Press **`Ctrl+C`** to stop. forza_ffb zeroes the force and releases the wheel on exit.
 
 ---
 
 ## Output backends
 
-### `ffbwheel` — real force feedback (MOZA R3 & any FFB wheel)
-Sends `steer_force` as an SDL_Haptic **constant-force** effect (SDL wraps DirectInput on Windows),
-plus an optional **sine** vibration from `road_texture`/`kerb`. Auto-selects a device whose name
-contains `device_name_match` (default `"moza"`), else the first FFB-capable device; or pin it with
-`--device-index`.
+### `ffbwheel`: real force feedback
 
-> Only verified on a **MOZA R3 + MOZA ES** wheel. Other devices are unverified — use at your own
-> risk (see the disclaimer at the top of this README).
+forza_ffb sends `steer_force` as an SDL_Haptic **constant-force** effect (on Windows, SDL drives DirectInput underneath) and can add a **sine** vibration from `road_texture` and `kerb`. It picks the first device whose name contains `device_name_match` (default `"moza"`), then falls back to the first FFB-capable device. Pass `--device-index` to choose one yourself.
 
-> **⚠️ Only one app can drive the wheel's FFB at a time.** This backend **takes over** the wheel,
-> so turn the game's own wheel FFB down/off (in-game FFB = 0, and/or disable FFB in MOZA Pit House
-> Horizon-compatibility mode) so they don't fight. The force you feel is then this tool's.
+> I have tested this backend on a **MOZA R3 + MOZA ES** and no other hardware. See the warning at the top before you try another wheel.
+
+> **One app at a time can drive a wheel's FFB.** forza_ffb takes the wheel over, so set the game's wheel FFB to 0 and/or turn off FFB in MOZA Pit House's Horizon compatibility mode. If you leave both on, the game and forza_ffb fight over the motor.
 >
-> **Centering spring:** this tool adds no spring and disables the DirectInput autocenter. On a
-> MOZA the centering is a **Pit House** setting — set `Spring` (and `Damper`/`Friction`/`Inertia`)
-> to 0 in Pit House for a clean/raw feel.
+> **Centering spring:** forza_ffb adds no spring and turns off the DirectInput autocenter. On a MOZA, Pit House owns the centering spring. For a raw feel, set `Spring`, `Damper`, `Friction` and `Inertia` to 0 in Pit House.
 
-### `vjoy` — effect channels as joystick axes
-Maps each channel to a vJoy axis (default: X=steer_force, Y=g_long, Z=road_texture, Rx=kerb,
-Ry=understeer, Rz=oversteer; remap via `output.vjoy.axis_map`). A vJoy axis is a virtual **input**,
-so it does **not** move a wheel motor by itself — use it to feed Joystick Gremlin, SimHub, or a DIY
-device that consumes an axis.
+### `vjoy`: effect channels as joystick axes
 
-### `console` — print channels
-Prints 1 of every `output.console.every` updates with an ASCII meter. Runs on any OS; use it to
-verify data flow and tune the feel before switching to a wheel.
+forza_ffb writes each channel to a vJoy axis. The defaults are X=steer_force, Y=g_long, Z=road_texture, Rx=kerb, Ry=understeer and Rz=oversteer, and you can remap them with `output.vjoy.axis_map`. vJoy creates a virtual **input** device, so an axis can't move a wheel motor by itself. Point Joystick Gremlin, SimHub or a DIY device at it.
+
+### `console`: print the channels
+
+Prints one of every `output.console.every` updates with an ASCII meter. It runs on any OS. Use it to confirm data flow and rough in your tuning before you switch to the wheel.
 
 ---
 
@@ -162,29 +136,26 @@ python -m forza_ffb [options]      (or: forza_ffb [options] after install)
 |------|------|------------|-------------|
 | `--config PATH` | path | all | JSON config file, deep-merged over the built-in defaults |
 | `--ip IP` | str | all | Listen IP (default `127.0.0.1`) |
-| `--port PORT` | int | all | Listen UDP port (default `2066`; must match the game's Data Out port) |
-| `--backend NAME` | choice | all | `console`, `vjoy`, `ffbwheel` (aliases `wheel`/`moza`/`sdl`), or `null` |
+| `--port PORT` | int | all | Listen UDP port (default `2066`, must match the game's Data Out port) |
+| `--backend NAME` | choice | all | `console`, `vjoy`, `ffbwheel` (aliases `wheel`/`moza`/`sdl`) or `null` |
 | `--device-id N` | int | vjoy | vJoy device id (default `1`) |
 | `--device-index N` | int | ffbwheel | Wheel index from `--list-devices` (`-1` = auto) |
-| `--device-name STR` | str | ffbwheel | Match wheel by name substring, e.g. `moza` (default `moza`) |
-| `--gain F` | float | ffb | `master_gain` — overall steering-force strength |
-| `--wheel-gain F` | float | ffbwheel | `constant_gain` — peak motor torque the wheel reaches (raise if too light) |
-| `--lat-g-ref F` | float | ffb | `lateral_g_ref_mps2` — RAISE to soften how fast force builds with cornering/speed |
-| `--rumble-gain F` | float | ffbwheel | Master vibration multiplier — LOWER for less off-road buzz (`0` = none) |
-| `--no-rumble` | flag | ffbwheel | Disable the sine vibration entirely (steering force only) |
-| `--invert` | flag | ffb | Invert steering-force sign (if the wheel pulls the wrong way) |
+| `--device-name STR` | str | ffbwheel | Match the wheel by a name substring, e.g. `moza` (default `moza`) |
+| `--gain F` | float | ffb | `master_gain`, the overall steering-force strength |
+| `--wheel-gain F` | float | ffbwheel | `constant_gain`, the peak motor torque. Raise it if the wheel feels light |
+| `--lat-g-ref F` | float | ffb | `lateral_g_ref_mps2`. Raise it to slow how fast force builds with cornering and speed |
+| `--rumble-gain F` | float | ffbwheel | Master vibration multiplier. Lower it for less off-road buzz (`0` = none) |
+| `--no-rumble` | flag | ffbwheel | Turn off the sine vibration and keep steering force alone |
+| `--invert` | flag | ffb | Flip the steering-force sign (use it if the wheel pulls the wrong way) |
 | `-v`, `--verbose` | count | all | `-v` = info logging, `-vv` = debug |
-| `--show-format` | flag | — | Print the Forza packet formats & key offsets, then exit |
-| `--list-devices` | flag | — | List FFB-capable wheels/joysticks SDL can see, then exit |
+| `--show-format` | flag | n/a | Print the Forza packet formats and key offsets, then exit |
+| `--list-devices` | flag | n/a | List the FFB-capable wheels and joysticks SDL can see, then exit |
 
-CLI flags override the config file, which overrides the built-in defaults.
+CLI flags beat the config file, and the config file beats the built-in defaults.
 
 ### Every config key is also a flag
 
-Beyond the short flags above, **every** option in the [configuration reference](#configuration-reference)
-has an auto-generated `--section-key` flag, so you can override anything from the command line
-without editing a file. The rule: take the dotted config path, join with `-`, and replace `_`
-with `-`. Booleans take an explicit `true`/`false`. Examples:
+Each option in the [configuration reference](#configuration-reference) also has a generated `--section-key` flag, so you can change anything without editing a file. To build the flag, take the dotted config path and turn each `.` and `_` into `-`. Booleans need an explicit `true` or `false`.
 
 | Config key | Flag |
 |------------|------|
@@ -195,114 +166,103 @@ with `-`. Booleans take an explicit `true`/`false`. Examples:
 | `output.vjoy.axis_map.steer_force` | `--output-vjoy-axis-map-steer-force RZ` |
 | `stale_timeout_s` | `--stale-timeout-s 1.5` |
 
-Run `python -m forza_ffb --help` to see the full list. The short flags in the table above are
-convenient aliases for the most-used keys and **take precedence** if both forms are given.
+`python -m forza_ffb --help` lists them all. The short flags in the first table cover the keys you'll touch most. If you pass a short flag and its long form together, the short flag wins.
 
 ---
 
 ## Configuration reference
 
-Copy `config.example.json`, edit, and pass `--config my.json`. Any subset can be supplied; missing
-keys fall back to the defaults below (deep-merged). **Every key here is also settable on the
-command line** as `--section-key` (see [Every config key is also a flag](#every-config-key-is-also-a-flag)).
+Copy `config.example.json`, edit it, and pass `--config my.json`. You can include any subset of keys, and forza_ffb deep-merges your file over the defaults below. You can also set any of these keys on the command line (see [Every config key is also a flag](#every-config-key-is-also-a-flag)).
 
 ### `listen`
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `listen.ip` | `"127.0.0.1"` | Interface to bind the UDP listener to |
-| `listen.port` | `2066` | UDP port to receive Data Out on |
+| `listen.ip` | `"127.0.0.1"` | Interface the UDP listener binds to |
+| `listen.port` | `2066` | UDP port that receives Data Out |
 
 ### `output`
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `output.backend` | `"console"` | `console` / `vjoy` / `ffbwheel` / `null` |
-| `output.rate_hz` | `0` | Output rate cap in Hz; `0` = emit once per received packet (~60 Hz) |
-| `output.console.every` | `10` | Print 1 of every N updates (console backend) |
+| `output.rate_hz` | `0` | Output rate cap in Hz. `0` = one output per received packet (~60 Hz) |
+| `output.console.every` | `10` | Print one of every N updates (console backend) |
 | `output.vjoy.device_id` | `1` | vJoy device id |
-| `output.vjoy.axis_map` | see below | channel → axis (`X Y Z RX RY RZ SL0 SL1`); omit a channel to skip it |
-| `output.ffbwheel.device_index` | `-1` | Wheel index (`-1` = first FFB-capable) |
-| `output.ffbwheel.device_name_match` | `"moza"` | Name substring to match (case-insensitive) |
+| `output.vjoy.axis_map` | see below | Channel → axis (`X Y Z RX RY RZ SL0 SL1`). Leave a channel out to skip it |
+| `output.ffbwheel.device_index` | `-1` | Wheel index (`-1` = first FFB-capable device) |
+| `output.ffbwheel.device_name_match` | `"moza"` | Name substring to match, case-insensitive |
 | `output.ffbwheel.constant_gain` | `1.0` | Scales `steer_force` → motor torque (peak strength) |
-| `output.ffbwheel.invert` | `false` | Flip force direction at the backend |
+| `output.ffbwheel.invert` | `false` | Flip force direction in the backend |
 | `output.ffbwheel.disable_autocenter` | `true` | Turn off the device's DirectInput autocenter spring |
 | `output.ffbwheel.rumble` | `true` | Add a sine vibration from `road_texture` + `kerb` |
 | `output.ffbwheel.rumble_gain` | `1.0` | Master multiplier on all rumble (lower = less off-road buzz) |
-| `output.ffbwheel.rumble_road_gain` | `0.6` | Road-texture (surface roughness) → rumble magnitude |
-| `output.ffbwheel.rumble_kerb_gain` | `1.0` | Kerb / bump jolts → rumble magnitude |
-| `output.ffbwheel.rumble_period_ms` | `20` | Sine period (smaller = higher-frequency buzz) |
+| `output.ffbwheel.rumble_road_gain` | `0.6` | Road texture (surface roughness) → rumble strength |
+| `output.ffbwheel.rumble_kerb_gain` | `1.0` | Kerb and bump jolts → rumble strength |
+| `output.ffbwheel.rumble_period_ms` | `20` | Sine period (smaller = higher-pitched buzz) |
 
 Default `axis_map`: `steer_force→X, g_long→Y, road_texture→Z, kerb→RX, understeer→RY, oversteer→RZ`.
 
-### `ffb` (force synthesis — shapes the *feel*)
+### `ffb` (force synthesis, which shapes the feel)
 | Key | Default | Meaning |
 |-----|---------|---------|
 | `ffb.master_gain` | `1.0` | Overall strength of `steer_force` |
-| `ffb.invert_steer` | `false` | Flip steering-force sign |
-| `ffb.steer_deadzone` | `0.02` | Suppress tiny centre forces (anti-hum) |
-| `ffb.weight_lateral` | `0.6` | Contribution of lateral G (cornering load) |
-| `ffb.weight_aligning` | `0.4` | Contribution of front slip-angle (self-aligning torque) |
-| `ffb.lateral_g_ref_mps2` | `18.0` | Lateral accel mapped to full force; **higher = more progressive / gentler ramp** |
-| `ffb.slip_angle_ref_rad` | `0.22` | Front slip angle mapped to full aligning term (≈12.6°) |
-| `ffb.speed_ref_mps` | `6.0` | Below this the wheel goes progressively light (parking) |
-| `ffb.understeer.threshold` | `1.0` | Front combined-slip where lightening begins |
-| `ffb.understeer.limit` | `1.8` | Front combined-slip for full understeer |
-| `ffb.understeer.drop` | `0.6` | Fraction of force removed at full understeer |
-| `ffb.oversteer.threshold` | `1.0` | Rear combined-slip where oversteer is reported |
-| `ffb.oversteer.limit` | `2.0` | Rear combined-slip for full oversteer |
-| `ffb.road_gain` | `1.0` | Surface-rumble → `road_texture` |
-| `ffb.kerb_gain` | `6.0` | Suspension-compression spikes → `kerb` |
-| `ffb.kerb_strip_boost` | `0.4` | Added `kerb` when a wheel is on a rumble strip |
-| `ffb.smoothing_alpha` | `0.5` | EMA per channel: `1.0` = none, lower = smoother but laggier |
+| `ffb.invert_steer` | `false` | Flip the steering-force sign |
+| `ffb.steer_deadzone` | `0.02` | Drops tiny forces around centre to stop hum |
+| `ffb.weight_lateral` | `0.6` | Share of lateral G (cornering load) |
+| `ffb.weight_aligning` | `0.4` | Share of front slip angle (self-aligning torque) |
+| `ffb.lateral_g_ref_mps2` | `18.0` | Lateral accel that maps to full force. **Higher = gentler ramp** |
+| `ffb.slip_angle_ref_rad` | `0.22` | Front slip angle that maps to the full aligning term (≈12.6°) |
+| `ffb.speed_ref_mps` | `6.0` | Below this speed the wheel goes light (parking) |
+| `ffb.understeer.threshold` | `1.0` | Front combined slip where lightening starts |
+| `ffb.understeer.limit` | `1.8` | Front combined slip for full understeer |
+| `ffb.understeer.drop` | `0.6` | Share of force removed at full understeer |
+| `ffb.oversteer.threshold` | `1.0` | Rear combined slip where oversteer starts to register |
+| `ffb.oversteer.limit` | `2.0` | Rear combined slip for full oversteer |
+| `ffb.road_gain` | `1.0` | Surface rumble → `road_texture` |
+| `ffb.kerb_gain` | `6.0` | Suspension compression spikes → `kerb` |
+| `ffb.kerb_strip_boost` | `0.4` | Extra `kerb` while a wheel sits on a rumble strip |
+| `ffb.smoothing_alpha` | `0.5` | Per-channel EMA. `1.0` = off, lower = smoother but laggier |
 
-### top level
+### Top level
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `stale_timeout_s` | `0.5` | If no packet arrives within this many seconds, output neutral (wheel relaxes) |
+| `stale_timeout_s` | `0.5` | Seconds without a packet before output goes neutral and the wheel relaxes |
 
 ---
 
 ## Tuning the feel
 
-Start with `--backend console`, take a corner, then switch to `ffbwheel`. The knobs that matter
-most (all overridable live via CLI without editing files):
+Start on `--backend console`, take a corner, then switch to `ffbwheel`. You can set each knob below as a CLI flag, so you never need to open a file to tune.
 
-- **Wheel gets hard too fast / too heavy in normal corners** → raise `--lat-g-ref` (e.g. `18`→`24`→`30`).
-  Higher = more progressive; full torque is reserved for genuinely high-G moments.
-- **Too light at the limit** → raise `--wheel-gain` (e.g. `1.3`).
-- **Everything too strong/weak** → adjust `--gain` (overall) or your wheel's FFB % in its driver.
-- **Pulls the wrong way** → add `--invert`.
-- **Too much off-road / surface vibration** → lower `--rumble-gain` (e.g. `0.4`), or `--no-rumble`
-  to remove it. For finer control, set `rumble_road_gain` (surface buzz) vs `rumble_kerb_gain`
-  (bumps/kerbs) separately in the config.
-- **Jittery / notchy** → lower `ffb.smoothing_alpha` (e.g. `0.3`); **laggy** → raise it toward `1.0`.
+- **Wheel goes heavy too fast in normal corners:** raise `--lat-g-ref`. Try `18`, then `24`, then `30`. Higher values save full torque for high-G moments.
+- **Too light at the limit:** raise `--wheel-gain` to around `1.3`.
+- **Everything too strong or too weak:** change `--gain`, or the FFB percentage in your wheel's driver.
+- **Wheel pulls the wrong way:** add `--invert`.
+- **Too much buzz off-road:** lower `--rumble-gain` (try `0.4`) or pass `--no-rumble`. To control surface buzz and kerb hits apart from each other, set `rumble_road_gain` and `rumble_kerb_gain` in the config.
+- **Notchy or jittery:** lower `ffb.smoothing_alpha` to about `0.3`. If it feels laggy, push it toward `1.0`.
 
-The MOZA R3 is a low-torque (≈3.8 Nm) base, so keep Pit House FFB strength near 100% and shape the
-*feel* here. Iterate by `Ctrl+C` and relaunching with new flag values.
+The R3 is a low-torque base at about 3.8 Nm. Leave Pit House FFB strength near 100% and shape the feel here. To try new values, hit `Ctrl+C` and relaunch with different flags.
 
 ---
 
-## Stopping / safety
+## Stopping safely
 
-- **Normal stop:** `Ctrl+C` in the bridge terminal — it zeroes the force, stops effects, and
-  releases the wheel. Don't just close the terminal window (a hard kill can skip that cleanup).
-- **Instant physical stop:** power off the wheelbase.
-- **Auto-relax:** leaving a race / pausing stops Forza's telemetry, so the wheel goes neutral within
-  `stale_timeout_s` (default 0.5 s).
-- **Run with no force:** `--backend console`, or set `output.ffbwheel.constant_gain: 0`.
+- **Normal stop:** `Ctrl+C` in the forza_ffb terminal. It zeroes the force, stops the effects and releases the wheel. If you close the window instead, Windows can kill the process before that cleanup runs.
+- **Emergency stop:** power off the wheelbase.
+- **Auto-relax:** Forza stops sending telemetry when you pause or leave a race, and the wheel goes neutral within `stale_timeout_s` (0.5 s by default).
+- **No force at all:** run `--backend console`, or set `output.ffbwheel.constant_gain` to `0`.
 
 ---
 
-## Testing / development
+## Testing and development
 
-Pure standard library — runs anywhere (no game/wheel/SDL needed):
+The tests use the standard library alone. You don't need the game, a wheel or SDL.
 
 ```bash
 python -m unittest discover -s tests       # parser, FFB math, axis/level scaling, UDP loopback
 python -m forza_ffb --show-format          # print packet layouts & key offsets
 ```
 
-`tools/fake_forza_sender.py` emits real 324-byte Horizon packets for scenarios
-`sweep | corner | kerbs | straight | idle`, so the full pipeline is exercisable offline.
+`tools/fake_forza_sender.py` sends real 324-byte Horizon packets for five scenarios (`sweep`, `corner`, `kerbs`, `straight`, `idle`), so you can run the whole pipeline offline.
 
 ---
 
@@ -323,10 +283,9 @@ config.example.json   full config you can copy and edit
 
 ---
 
-## Packet format reference (Horizon / FH4-5-6, 324 B, little-endian)
+## Packet format reference (Horizon / FH4, FH5, FH6: 324 B, little-endian)
 
-Bytes 0–231 are the shared "sled"; Horizon titles insert a 12-byte block (232–243), so the dash
-section starts at 244. Selected cross-validated offsets:
+Bytes 0 to 231 hold the "sled" block that every Forza title shares. Horizon games insert 12 bytes at 232 to 243, which pushes the dash section to offset 244. I cross-checked these offsets against two community sources (see Credits):
 
 ```
 IsRaceOn @0(s32)   AccelerationX @20(f32)   TireSlipAngle FL @164(f32)
@@ -341,38 +300,37 @@ Run `python -m forza_ffb --show-format` for the full list.
 
 | Symptom | Fix |
 |---------|-----|
-| No data / "telemetry stale" | Data Out off, IP/port mismatch, or you're in a menu/replay (Forza only streams while driving). Confirm with `--backend console` first. |
-| `WinError 10013` on start | The UDP port is reserved (Hyper-V/WSL) or in use. Check `netsh int ipv4 show excludedportrange protocol=udp` and `netstat -ano \| findstr :2066`; pick a free port and match it in-game. |
-| Wheel doesn't appear in `--list-devices` | Power on the base; make sure it's not in a mode that hides FFB; install `pysdl2 pysdl2-dll`. |
+| No data, or "telemetry stale" | Check that Data Out is on and the IP and port match. Forza sends nothing from menus or replays. Confirm with `--backend console` first. |
+| `WinError 10013` on start | Hyper-V/WSL reserved the UDP port, or another app holds it. Run `netsh int ipv4 show excludedportrange protocol=udp` and `netstat -ano \| findstr :2066`, then pick a free port and set the same one in-game. |
+| Wheel missing from `--list-devices` | Power on the base, check that its current mode exposes FFB, and install `pysdl2 pysdl2-dll`. |
 | Force pulls the wrong way | `--invert`. |
-| Wheel feels dead / too strong | `--wheel-gain` / `--gain`; check `speed_ref_mps` (no force at standstill is intentional). |
-| Heavy too quickly | raise `--lat-g-ref`. |
-| Persistent centering spring | Set `Spring`/`Damper` to 0 in MOZA Pit House (it's a driver setting, not this tool). |
+| Wheel feels dead or too strong | Adjust `--wheel-gain` or `--gain`. Check `speed_ref_mps` too: the wheel goes light at a standstill on purpose. |
+| Gets heavy too fast | Raise `--lat-g-ref`. |
+| Centering spring won't go away | Set `Spring` and `Damper` to 0 in MOZA Pit House. The spring lives in the driver, outside forza_ffb's reach. |
 | vJoy "failed to set axis" | Enable that axis for the device in *Configure vJoy*. |
-| Forza Horizon 3 / older | Not supported — those games have no Data Out telemetry. |
+| Forza Horizon 3 or older | Unsupported. Those games have no Data Out telemetry. |
 
 ---
 
-## Credits & references
+## Credits and references
 
-Built on / verified against these projects and resources:
+I built forza_ffb on these projects and checked the packet format against them.
 
 **Output targets**
-- [vJoy](https://github.com/jshafer817/vJoy) — virtual joystick driver (original on [SourceForge](https://sourceforge.net/projects/vjoystick/))
-- [pyvjoy](https://github.com/tidzo/pyvjoy) — Python bindings for vJoy (pip-installable fork: [maxofbritton/pyvjoy](https://github.com/maxofbritton/pyvjoy))
-- [Joystick Gremlin](https://github.com/WhiteMagic/JoystickGremlin) — joystick remapping/scripting that consumes vJoy
-- [PySDL2](https://github.com/py-sdl/py-sdl2) — SDL2 bindings used by the `ffbwheel` backend ([pysdl2-dll](https://github.com/a-hurst/pysdl2-dll) bundles the runtime)
-- [SDL](https://github.com/libsdl-org/SDL) — the underlying [SDL_Haptic](https://wiki.libsdl.org/SDL2/CategoryHaptic) force-feedback API
+- [vJoy](https://github.com/jshafer817/vJoy): virtual joystick driver (original on [SourceForge](https://sourceforge.net/projects/vjoystick/))
+- [pyvjoy](https://github.com/tidzo/pyvjoy): Python bindings for vJoy (pip-installable fork at [maxofbritton/pyvjoy](https://github.com/maxofbritton/pyvjoy))
+- [Joystick Gremlin](https://github.com/WhiteMagic/JoystickGremlin): joystick remapping and scripting that reads vJoy
+- [PySDL2](https://github.com/py-sdl/py-sdl2): the SDL2 bindings behind the `ffbwheel` backend ([pysdl2-dll](https://github.com/a-hurst/pysdl2-dll) bundles the runtime)
+- [SDL](https://github.com/libsdl-org/SDL): the [SDL_Haptic](https://wiki.libsdl.org/SDL2/CategoryHaptic) force-feedback API underneath
 
 **Forza telemetry format**
-- [richstokes/Forza-data-tools](https://github.com/richstokes/Forza-data-tools) — packet-format field tables the parser offsets were derived from
-- [satyajiit/forza-horizon-6-moza-bridge](https://github.com/satyajiit/forza-horizon-6-moza-bridge) — FH6 format + driver-input offset cross-validation
+- [richstokes/Forza-data-tools](https://github.com/richstokes/Forza-data-tools): the field tables I derived the parser offsets from
+- [satyajiit/forza-horizon-6-moza-bridge](https://github.com/satyajiit/forza-horizon-6-moza-bridge): FH6 format and a second check on the driver-input offsets
 - [Forza "Data Out" telemetry structure (community forum)](https://forums.forza.net/t/data-out-telemetry-variables-and-structure/535984) and the [official FH6 Data Out docs](https://support.forza.net/hc/en-us/articles/51744149102611-Forza-Horizon-6-Data-Out-Documentation)
-- [MOZA SDK](https://mozaracing.com/pages/sdk) — reference for MOZA-native FFB (the "augment instead of replace" path)
+- [MOZA SDK](https://mozaracing.com/pages/sdk): reference for MOZA-native FFB, if you'd rather layer effects on top of the game's FFB than replace it
 
-This project is independent and is not affiliated with or endorsed by Microsoft, Turn 10/Playground
-Games, MOZA Racing, or any project listed above.
+forza_ffb is an independent project. Microsoft, Turn 10, Playground Games, MOZA Racing and the projects listed above have no affiliation with it and don't endorse it.
 
 ## License
 
-MIT — see `LICENSE`.
+MIT. See `LICENSE`.
